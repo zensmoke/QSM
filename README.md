@@ -32,11 +32,12 @@ Python-пайплайн для количественной оценки маг�
 ## Установка
 
 ```bash
-git clone https://github.com/<username>/qsm-pipeline.git
-cd qsm-pipeline
+git clone [https://github.com/<username>/qsm-pipeline.git](https://github.com/zensmoke/QSM.git)
+cd QSM
 
 # Скачать KCL атлас в папку KCL/ (см. ниже)
 # https://github.com/lukevano/KCL_Neuromelanin-MRI
+git clone https://github.com/lukevano/KCL_Neuromelanin-MRI.git KCL
 
 # Создать окружение
 conda create -n qsm_nm python=3.11 -y
@@ -89,13 +90,6 @@ python qsm.py --help
 
 python neuromelanin/run.py --help
 ```
-
-## Внешние ресурсы
-KCL атлас не входит в репозиторий проекта
-```bash
-git clone https://github.com/lukevano/KCL_Neuromelanin-MRI.git KCL
-```
-
 
 
 
