@@ -1,0 +1,28 @@
+{
+  "protocol": "MTC_TSE_3T",
+  "scanner": "3T",
+  "reference_region": "CrusCerebri",
+  "roi": "SN-VTA",
+  "notes": "Ориентировочные значения из Al Haddad et al., 2023 (JMRI).",
+  "age_regression": {
+    "intercept": 0.1015,
+    "slope_per_year": 0.0,
+    "residual_sd": 0.03,
+    "n_subjects": 152,
+    "age_range": [53, 86]
+  },
+  "sex_adjustment": {
+    "male_offset": 0.0,
+    "female_offset": 0.01
+  },
+  "classification_thresholds": {
+    "z_borderline_low": -1.5,
+    "z_abnormal_low": -2.0,
+    "z_borderline_high": 1.5,
+    "z_abnormal_high": 2.0
+  },
+  "laterality": {
+    "normal_abs_max": 0.10,
+    "borderline_abs_max": 0.15
+  }
+}

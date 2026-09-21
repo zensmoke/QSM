@@ -1,0 +1,47 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# macOS
+.DS_Store
+Thumbs.db
+
+# Данные пациентов (НИКОГДА не публиковать!)
+data/
+output/
+*.nii
+*.nii.gz
+*.dcm
+*.dicom
+
+# Служебные файлы
+_rename_mapping.json
+crash.log
+*.log
+tmp/
+temp/
+
+# Большие внешние ресурсы
+KCL/
+romeo.jl
+Manifest.toml
+Project.toml
+
+# Личные конфиги
+config.yaml
+config_local.yaml
+config_patient_*.yaml
+
+# НО: пример конфига коммитить!
+!config.example.yaml

@@ -1,0 +1,72 @@
+# =============================================================================
+# QSM + Neuromelanin Pipeline — объединённые зависимости
+# =============================================================================
+# Python 3.11 (обязательно — для совместимости antspyx и nipype)
+#
+# Рекомендуемая установка:
+#   conda create -n qsm_nm python=3.11 -y
+#   conda activate qsm_nm
+#   conda install -c conda-forge numpy=1.26 scipy=1.15 pandas matplotlib \
+#                                  scikit-image scikit-learn statsmodels
+#   pip install -r requirements.txt
+# =============================================================================
+
+# --- Основные научные ---
+# ВАЖНО: numpy и scipy лучше ставить через conda-forge (готовые wheels)
+numpy>=1.24,<2.4
+scipy>=1.10,<1.16
+
+# --- NIfTI / NIfTI tools ---
+nibabel>=5.0
+
+# --- Обработка изображений ---
+scikit-image>=0.21
+
+# --- DICOM ---
+pydicom>=2.4
+
+# --- Чтение NIfTI, записанных ANTs (ITK) ---
+SimpleITK>=2.3
+
+# --- Регистрация атласа (ANTs Python-обёртка) ---
+antspyx>=0.5.4
+
+# --- Визуализация и отчёты ---
+matplotlib>=3.7
+pandas>=2.0
+openpyxl>=3.1
+
+# --- Конфигурация и утилиты ---
+PyYAML>=6.0
+tqdm>=4.65
+
+# --- KCL-совместимый пайплайн (nipype) ---
+nipype>=1.8.6
+traits
+prov
+rdflib
+networkx
+filelock
+isodate
+looseversion
+etelemetry
+simplejson
+
+# =============================================================================
+# ОПЦИОНАЛЬНО: HD-BET
+# =============================================================================
+# torch>=2.0
+# hd-bet>=2.0.0
+
+# =============================================================================
+# СИСТЕМНЫЕ ЗАВИСИМОСТИ (не через pip)
+# =============================================================================
+# FSL (bet, flirt, fnirt, applywarp):
+#   brew install fsl
+#   export FSLDIR=/usr/local/fsl
+#   export PATH=$FSLDIR/bin:$PATH
+#   export FSLOUTPUTTYPE=NIFTI_GZ
+#
+# Julia + ROMEO (опционально):
+#   brew install julia
+#   julia -e 'using Pkg; Pkg.add("ROMEO")'

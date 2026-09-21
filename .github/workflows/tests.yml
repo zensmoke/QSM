@@ -1,0 +1,25 @@
+name: Code check
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Syntax check (compile all .py)
+        run: |
+          python -m compileall -q \
+              qsm.py \
+              preprocessing/ \
+              qsm_io/ \
+              phase_unwrapping/ \
+              background_removal/ \
+              dipole_inversion/ \
+              neuromelanin/ \
+              utils/ \
+              tools/
