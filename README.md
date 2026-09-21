@@ -79,6 +79,17 @@ qsm-pipeline/
 └── utils/                 ← работа с NIfTI
 ```
 
+Если возникнуть вопросы по работе пайплайна (QSM или NM), можете прописать флаг --help
+```bash
+#QSM
+
+python qsm.py --help
+
+#NM
+
+python neuromelanin/run.py --help
+```
+
 ## Внешние ресурсы
 KCL атлас не входит в репозиторий проекта
 ```bash
