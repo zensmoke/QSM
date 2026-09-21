@@ -32,7 +32,7 @@ Python-пайплайн для количественной оценки маг�
 ## Установка
 
 ```bash
-git clone [https://github.com/<username>/qsm-pipeline.git](https://github.com/zensmoke/QSM.git)
+git clone https://github.com/zensmoke/QSM.git QSM
 cd QSM
 
 # Скачать KCL атлас в папку KCL/ (см. ниже)
