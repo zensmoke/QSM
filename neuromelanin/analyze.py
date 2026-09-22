@@ -167,6 +167,7 @@ def compute_nm_cnr(nm_mri_path: Path, masks: dict, out_dir: Path) -> dict:
         log(f"  ⚠ SN темнее Crus", "warn")
 
     mag_img = nib.load(str(nm_mri_path))
+    out_dir.mkdir(parents=True, exist_ok=True)
     nib.save(nib.Nifti1Image(cnr_map.astype(np.float32),
                               mag_img.affine, header),
              str(out_dir / "nm_cnr_map.nii.gz"))
@@ -270,6 +271,32 @@ def compute_qsm_in_roi(qsm_path: Path, masks: dict) -> dict:
         "sn_cc_ratio_p95":    sn_cc["p95"],
         "sn_cc_ratio_max":    sn_cc["max"],
     }
+
+def _compute_robust_safe(args, work: Path, masks: dict) -> dict:
+    """
+    Обёртка: robust-метод с graceful fallback.
+    Возвращает {} если модуль недоступен или упал.
+    """
+    try:
+        from neuromelanin.cnr_robust import compute_nm_cnr_robust
+    except ImportError:
+        log("  cnr_robust.py не найден — robust пропущен")
+        return {}
+
+    try:
+        return compute_nm_cnr_robust(
+            nm_mri_path=args.nm_mri,
+            sn_l_path=masks["paths"]["SN_VTA_L"],
+            sn_r_path=masks["paths"]["SN_VTA_R"],
+            crus_path=masks["paths"]["CrusCerebri"],
+            trim=0.1,
+            min_sn_voxels=5,
+            min_crus_voxels=20,
+            verbose=True,
+        )
+    except Exception as e:
+        log(f"  ⚠ robust упал: {e}", "warn")
+        return {}
 
 
 def save_montage(qsm_path: Path, out_dir: Path, n_slices=9):
@@ -412,6 +439,36 @@ def _main_impl():
     # --- QSM в SN ---
     qsm_result = compute_qsm_in_roi(args.qsm, masks)
 
+    # --- NM-CNR robust (диагностический) ---
+    log("Robust NM-CNR (slice-wise + ipsilateral)", "step")
+    nm_result_robust = _compute_robust_safe(args, work, masks)
+
+    comparison_robust = None
+    if nm_result_robust and patient.age is not None and HAS_DEMOGRAPHICS:
+        try:
+            comparison_robust = compare_with_normative(
+                nm_result_robust["cnr_mean_pct"],
+                patient, sequence=nm_seq,
+            )
+            log(f"  Robust: CNR={nm_result_robust['cnr_mean_pct']:+.2f}%  "
+                f"z={comparison_robust.z_score:+.2f}  "
+                f"({comparison_robust.interpretation})")
+        except Exception as e:
+            log(f"  ⚠ robust сравнение упало: {e}", "warn")
+
+    if nm_result and nm_result_robust:
+        base = nm_result["cnr_mean"]
+        rob = nm_result_robust["cnr_mean"]
+        d = abs(base - rob)
+        rel = 100 * d / abs(base) if base else 0.0
+        log(f"  Δ(base vs robust) = {d:.4f} ({rel:.1f}%)")
+        if rel > 20:
+            log(f"  ⚠ >20% — B1- или L/R-неоднородности", "warn")
+        elif rel > 10:
+            log(f"  ⚠ 10–20% — посмотрите QC-монтаж", "warn")
+        else:
+            log(f"  ✅ Методы согласуются")
+
     # --- Монтаж ---
     montage_path = None
     if not args.no_montage:
@@ -425,8 +482,12 @@ def _main_impl():
         "registration": reg_meta,
         "masks": masks["stats"],
         "nm_cnr": nm_result,
+        "nm_cnr_robust": nm_result_robust,
         "comparison_with_normative": (
             asdict(comparison) if comparison else None
+        ),
+        "comparison_with_normative_robust": (
+            asdict(comparison_robust) if comparison_robust else None
         ),
         "qsm_in_sn": qsm_result,
     }
@@ -450,6 +511,13 @@ def _main_impl():
         print(f"      CNR mean = {nm_result['cnr_mean_pct']:+.2f}%   "
               f"[L={nm_result['cnr_left_pct']:+.2f}%, "
               f"R={nm_result['cnr_right_pct']:+.2f}%]")
+
+    if nm_result_robust:
+        d = abs(nm_result["cnr_mean"] - nm_result_robust["cnr_mean"])
+        rel = (100 * d / abs(nm_result["cnr_mean"])
+               if nm_result.get("cnr_mean") else 0)
+        print(f"      Robust CNR = {nm_result_robust['cnr_mean_pct']:+.2f}% "
+              f"(Δ={rel:.1f}%)")
 
     if comparison:
         print(f"\n  🧬 Сравнение с нормой ({comparison.field_used:.1f}T, "

@@ -1,8 +1,10 @@
 """
 Оркестратор NM-пайплайна: ANTs + SimpleITK + nibabel.
 
-Запускает ТРИ процесса для избежания segfault.
-Все пути — через CLI. Поддерживает TSE / MTC-GRE / GRE.
+Запускает ТРИ процесса:
+  1) ANTs регистрация (standard / intermediate / direct / multi-t1)
+  2) SimpleITK: извлечение масок
+  3) nibabel: анализ NM-CNR + QSM
 """
 import argparse
 import subprocess
@@ -29,12 +31,28 @@ def find_t1(data_dir: Path, explicit: Path | None = None) -> Path | None:
         data_dir / "T1_sag.nii", data_dir / "T1_sag.nii.gz",
         data_dir / "T1_tra.nii", data_dir / "T1_tra.nii.gz",
         data_dir / "T1w.nii", data_dir / "T1w.nii.gz",
+        data_dir / "T1_cor.nii", data_dir / "T1_cor.nii.gz",
     ]
     for c in candidates:
         if c.exists():
             return c
     found = sorted(data_dir.glob("T1*.nii*"))
     return found[0] if found else None
+
+
+def find_t1_planes(data_dir: Path) -> dict:
+    planes = {}
+    for p in sorted(data_dir.glob("T1*.nii*")):
+        name = p.name.lower()
+        if "sag" in name:
+            planes.setdefault("sag", p)
+        elif "tra" in name:
+            planes.setdefault("tra", p)
+        elif "cor" in name:
+            planes.setdefault("cor", p)
+        else:
+            planes.setdefault(p.stem, p)
+    return planes
 
 
 def find_nm_mri(data_dir: Path) -> Path | None:
@@ -52,155 +70,90 @@ def find_nm_mri(data_dir: Path) -> Path | None:
 
 def main():
     p = argparse.ArgumentParser(
-        description="NM-CNR + QSM pipeline (ANTs + SimpleITK + nibabel). "
-                    "Все пути указываются явно через CLI.",
+        description="NM-CNR + QSM pipeline.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-⚠  ВАЖНО: ЗАПУСКАЙТЕ ПОСЛЕ main.py
-──────────────────────────────────
-Этот скрипт ОЖИДАЕТ УЖЕ ПЕРЕИМЕНОВАННЫЕ файлы в --data-dir:
-    echo-1_part-mag.nii     (NM-MRI)
-    echo-1_part-phase.nii
-    echo-1_part-mag.json
-    ...
-    T1_tra.nii / T1_sag.nii
+РЕЖИМЫ РЕГИСТРАЦИИ NM → MNI
+══════════════════════════
+  1) Standard (по умолчанию):
+       --t1 T1_sag.nii
+     NM --Rigid--> T1_sag --SyN--> MNI
 
-Если файлы ещё не переименованы — сначала запустите main.py:
-    python main.py \\
-        --data-dir /путь/к/data/nifti \\
-        --output-dir /путь/к/output
+  2) Intermediate через вторую T1-плоскость:
+       --t1 T1_sag.nii --t1-other T1_tra.nii
+     NM --Rigid--> T1_tra --Rigid--> T1_sag --SyN--> MNI
 
-main.py автоматически переименует ВСЕ NIfTI-файлы в формат
-echo-N_part-mag/phase. Вручную переименовывать НЕ НУЖНО.
+  3) Direct (без T1):
+       --direct-nm-to-mni --direct-method Affine
+     NM --Affine--> MNI
 
-Если у вас уже есть готовые NM-MRI (TSE) — файл называется иначе
-(например, NM.nii). Укажите его явно:
-    --nm-mri /путь/к/data/nifti/NM.nii
-
-ОЖИДАЕМЫЕ ФАЙЛЫ В --data-dir
-─────────────────────────────
-  Для MTC-GRE (Philips) — ваш текущий протокол:
-    echo-1_part-mag.nii     ← NM-MRI = echo-1 с MTC-препульсом
-    echo-1_part-phase.nii
-    echo-1_part-mag.json
-    ...
-    T1_tra.nii или T1_sag.nii
-
-  Для TSE (Siemens) — новый протокол:
-    NM.nii или NM_TSE.nii   ← отдельный TSE-скан
-    T1_tra.nii или T1_sag.nii
-
-ТИПЫ NM-MRI ПОСЛЕДОВАТЕЛЬНОСТЕЙ
-────────────────────────────────
-  tse       — Turbo Spin Echo (Siemens, Al Haddad 2023)
-              Норма CNR SN: ~10%. Не совместим с QSM.
-  mtc_gre   — GRE + MT-препульс (Philips)
-              Норма CNR SN: ~22%. Совместим с QSM.
-  gre       — GRE без MT. ⚠ Не подходит для NM-CNR.
-  auto      — определить из JSON sidecar (по умолчанию)
-
-СТРУКТУРА ПАПОК
-───────────────
-  /путь/к/пациенту/
-  ├── data/
-  │   ├── nifti/           ← --data-dir
-  │   │   ├── echo-1_part-mag.nii     (MTC-GRE) ИЛИ NM.nii (TSE)
-  │   │   ├── echo-1_part-phase.nii
-  │   │   ├── echo-1_part-mag.json
-  │   │   ├── ... (остальные эхо)
-  │   │   └── T1_tra.nii или T1_sag.nii
-  │   └── dicom/           ← --dicom-dir
-  └── output/              ← --output-dir (должна содержать qsm.nii.gz)
+  4) Мульти-T1 (перебор всех стратегий):
+       --multi-t1
+     Пробует все standard_*, intermediate_*, direct_* и выбирает
+     лучшую по SN χ mean в QSM. Требует qsm.nii.gz.
 
 ПРИМЕРЫ
-───────
-  # MTC-GRE (Philips) — стандартный протокол
+═══════
+  # Мульти-T1
   python neuromelanin/run.py \\
-      --data-dir /путь/data/nifti \\
-      --dicom-dir /путь/data/dicom \\
-      --output-dir /путь/output \\
-      --kcl-dir /путь/KCL \\
-      --syn
+      --data-dir ... --output-dir ... --kcl-dir ./KCL \\
+      --multi-t1 --force
 
-  # TSE (Siemens) — с явным файлом NM-MRI
+  # Intermediate через T1_tra
   python neuromelanin/run.py \\
-      --data-dir /путь/data/nifti \\
-      --dicom-dir /путь/data/dicom \\
-      --output-dir /путь/output \\
-      --kcl-dir /путь/KCL \\
-      --nm-mri /путь/data/nifti/NM_TSE.nii \\
-      --nm-sequence tse \\
-      --syn
+      --data-dir ... --output-dir ... --kcl-dir ./KCL \\
+      --t1 T1_sag.nii --t1-other T1_tra.nii --force
+
+  # Direct
+  python neuromelanin/run.py \\
+      --data-dir ... --output-dir ... --kcl-dir ./KCL \\
+      --direct-nm-to-mni --direct-method Affine --force
 """,
     )
 
-    # Обязательные пути
-    p.add_argument("--data-dir", type=Path, required=True,
-                   help="[REQUIRED] Папка с УЖЕ ПЕРЕИМЕНОВАННЫМИ NIfTI "
-                        "(echo-N_part-mag/phase). "
-                        "Переименование делает main.py — запустите его первым. "
-                        "⚠ Не указывайте файл .nii — только папку.")
-    p.add_argument("--output-dir", type=Path, required=True,
-                   help="[REQUIRED] Папка результатов (внутри — nm_analysis/). "
-                        "Должна содержать qsm.nii.gz (результат main.py) "
-                        "для QSM-части анализа.")
-    p.add_argument("--kcl-dir", type=Path, required=True,
-                   help="[REQUIRED] Папка с KCL атласом (содержит templates/). "
-                        "⚠ Не указывайте templates/ напрямую.")
+    p.add_argument("--data-dir", type=Path, required=True)
+    p.add_argument("--output-dir", type=Path, required=True)
+    p.add_argument("--kcl-dir", type=Path, required=True)
 
-    # Опциональные пути
-    p.add_argument("--dicom-dir", type=Path, default=None,
-                   help="Папка с DICOM (демография; обычно data/dicom/)")
-    p.add_argument("--t1", type=Path, default=None,
-                   help="Явный путь к T1 (иначе — автопоиск T1_tra/T1_sag/T1w)")
-    p.add_argument("--nm-mri", type=Path, default=None,
-                   help="Явный путь к NM-MRI. "
-                        "По умолчанию: echo-1_part-mag.nii (MTC-GRE). "
-                        "Для TSE укажите: NM.nii или NM_TSE.nii.")
-    p.add_argument("--qsm", type=Path, default=None,
-                   help="Явный путь к QSM (по умолчанию output-dir/qsm.nii.gz)")
+    p.add_argument("--dicom-dir", type=Path, default=None)
+    p.add_argument("--t1", type=Path, default=None)
+    p.add_argument("--t1-other", type=Path, default=None,
+                   help="Вторая T1-плоскость (не anchor) для intermediate.")
+    p.add_argument("--nm-mri", type=Path, default=None)
+    p.add_argument("--qsm", type=Path, default=None)
 
-    # Параметры NM
     p.add_argument("--nm-sequence", type=str, default="auto",
-                   choices=["auto", "tse", "mtc_gre", "gre"],
-                   help="Тип NM-MRI последовательности: "
-                        "tse | mtc_gre | gre | auto (default: auto). "
-                        "Влияет на выбор нормативных значений CNR.")
+                   choices=["auto", "tse", "mtc_gre", "gre"])
 
-    # Параметры обработки
-    p.add_argument("--syn", action="store_true",
-                   help="SyN для T1→MNI (иначе Affine). "
-                        "⚠ Не указан → Affine может провалиться — используйте --syn.")
-    p.add_argument("--force", action="store_true",
-                   help="Пересчитать всё с нуля (удалить старые маски и регистрацию)")
-    p.add_argument("--no-montage", action="store_true",
-                   help="Без PNG-монтажа")
-    p.add_argument("--threads", type=int, default=4,
-                   help="Потоки для ANTs (default: 4)")
-    p.add_argument("--field-strength", type=float, default=None,
-                   help="B0 в Тесла (1.5 или 3.0). Если не указан — из DICOM.")
-    p.add_argument("--erode-sn", type=int, default=3,
-                   help="Радиус эрозии маски SN (default: 3).")
+    p.add_argument("--syn", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--no-montage", action="store_true")
+    p.add_argument("--threads", type=int, default=4)
+    p.add_argument("--field-strength", type=float, default=None)
+    p.add_argument("--erode-sn", type=int, default=3)
 
-    # Сдвиг SN
-    p.add_argument("--sn-shift", type=int, default=None,
-                   help="Фиксированный сдвиг SN в вокселях "
-                        "(если не задан --auto-sn-shift)")
-    p.add_argument("--auto-sn-shift", action="store_true", default=True,
-                   help="Автоматическая калибровка сдвига SN (default: True)")
+    p.add_argument("--sn-shift", type=int, default=None)
+    p.add_argument("--auto-sn-shift", action="store_true", default=True)
     p.add_argument("--no-auto-sn-shift", dest="auto_sn_shift",
-                   action="store_false",
-                   help="Отключить автокалибровку (использовать --sn-shift)")
-    p.add_argument("--sn-shift-range", type=str, default="0,30,2",
-                   help="Диапазон автокалибровки: start,stop,step "
-                        "(default: '0,30,2')")
+                   action="store_false")
+    p.add_argument("--sn-shift-range", type=str, default="0,30,2")
+
+    p.add_argument("--direct-nm-to-mni", action="store_true")
+    p.add_argument("--direct-method", default="Affine",
+                   choices=["Affine", "Rigid", "SyN"])
+
+    p.add_argument("--multi-t1", action="store_true")
+    p.add_argument("--multi-keep-all", action="store_true")
+    p.add_argument("--multi-strategies", type=str, default=None)
+    p.add_argument("--multi-timeout", type=int, default=600)
 
     args = p.parse_args()
 
     DATA_DIR = args.data_dir.expanduser().resolve()
     OUTPUT_DIR = args.output_dir.expanduser().resolve()
     KCL_DIR = args.kcl_dir.expanduser().resolve()
-    DICOM_DIR = args.dicom_dir.expanduser().resolve() if args.dicom_dir else None
+    DICOM_DIR = (args.dicom_dir.expanduser().resolve()
+                 if args.dicom_dir else None)
 
     WORK_DIR = OUTPUT_DIR / "nm_analysis"
     REG_DIR = WORK_DIR / "_reg"
@@ -212,7 +165,8 @@ echo-N_part-mag/phase. Вручную переименовывать НЕ НУЖ
 
     NM_MRI = args.nm_mri.expanduser() if args.nm_mri else find_nm_mri(DATA_DIR)
     T1_PATH = find_t1(DATA_DIR, args.t1)
-    QSM_PATH = args.qsm.expanduser() if args.qsm else (OUTPUT_DIR / "qsm.nii.gz")
+    QSM_PATH = (args.qsm.expanduser() if args.qsm
+                else (OUTPUT_DIR / "qsm.nii.gz"))
 
     MASK_FILES = [
         WORK_DIR / "SN_VTA_L_native.nii.gz",
@@ -227,11 +181,16 @@ echo-N_part-mag/phase. Вручную переименовывать НЕ НУЖ
         ATLAS_NATIVE.unlink(missing_ok=True)
         REG_META.unlink(missing_ok=True)
         for pat in ["SN_VTA*.nii.gz", "CrusCerebri*.nii.gz",
-                     "all_masks_combined.nii.gz", "sn_shift_calibration.json"]:
+                    "all_masks_combined.nii.gz", "sn_shift_calibration.json"]:
             for f in WORK_DIR.glob(pat):
                 f.unlink()
+        import shutil as _sh
+        for dname in ("debug_direct", "debug_intermediate",
+                      "multi_strategies"):
+            d = REG_DIR / dname
+            if d.exists():
+                _sh.rmtree(d, ignore_errors=True)
 
-    # Проверки
     print("\n" + "=" * 65)
     print("  NM-CNR PIPELINE")
     print("=" * 65)
@@ -251,19 +210,37 @@ echo-N_part-mag/phase. Вручную переименовывать НЕ НУЖ
         print(f"\n❌ NM-MRI не найден в {DATA_DIR}")
         sys.exit(1)
     print(f"\n  NM-MRI:       {NM_MRI.name}")
+    print(f"  QSM:          "
+          f"{QSM_PATH.name if QSM_PATH.exists() else '⚠ не найден'}")
 
-    print(f"  QSM:          {QSM_PATH.name if QSM_PATH.exists() else '⚠ не найден'}")
+    if args.multi_t1:
+        planes = find_t1_planes(DATA_DIR)
+        if not planes:
+            print(f"\n❌ --multi-t1: T1_*.nii* не найдены в {DATA_DIR}")
+            sys.exit(1)
+        if not QSM_PATH.exists():
+            print(f"\n❌ --multi-t1 требует QSM: {QSM_PATH}")
+            sys.exit(1)
+        print(f"  Регистрация:  МУЛЬТИ-T1 ({len(planes)} плоскостей: "
+              f"{', '.join(sorted(planes))})")
+    elif args.direct_nm_to_mni:
+        print(f"  T1:           (не используется)")
+        print(f"  Регистрация:  ПРЯМАЯ NM → MNI ({args.direct_method})")
+    else:
+        if T1_PATH is None or not T1_PATH.exists():
+            print(f"\n❌ T1 не найден в {DATA_DIR}")
+            sys.exit(1)
+        print(f"  T1 (anchor):  {T1_PATH.name}")
+        if args.t1_other:
+            print(f"  T1 (other):   {args.t1_other.name}")
+            print(f"  Регистрация:  INTERMEDIATE через T1_other")
+        else:
+            print(f"  SyN:          {args.syn}")
+            print(f"  Регистрация:  STANDARD")
 
-    if T1_PATH is None or not T1_PATH.exists():
-        print(f"\n❌ T1 не найден в {DATA_DIR}")
-        sys.exit(1)
-    print(f"  T1:           {T1_PATH.name}")
     print(f"  NM sequence:  {args.nm_sequence}")
-
     if args.field_strength:
         print(f"  B0:           {args.field_strength:.1f}T")
-
-    print(f"  SyN:          {args.syn}")
     print(f"  Erode SN:     {args.erode_sn}")
     if args.auto_sn_shift:
         print(f"  SN shift:     АВТО ({args.sn_shift_range})")
@@ -277,35 +254,98 @@ echo-N_part-mag/phase. Вручную переименовывать НЕ НУЖ
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     REG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ПРОЦЕСС 1: ANTs
+    # =====================================================================
+    # ПРОЦЕСС 1: Регистрация
+    # =====================================================================
     if not ATLAS_NATIVE.exists():
-        run(
-            [sys.executable, str(script_dir / "register.py"),
-             "--subject-t1", str(T1_PATH),
-             "--nm-mri", str(NM_MRI),
-             "--mni-t1", str(MNI_T1),
-             "--atlas-mni", str(ATLAS_MNI),
-             "--output", str(ATLAS_NATIVE),
-             "--meta", str(REG_META),
-             "--type", "SyN" if args.syn else "Affine",
-             "--threads", str(args.threads)],
-            description="ПРОЦЕСС 1: ANTs регистрация"
-        )
+
+        if args.multi_t1:
+            multi_script = script_dir / "register_multi.py"
+            if not multi_script.exists():
+                print(f"\n❌ Не найден {multi_script}")
+                sys.exit(1)
+
+            cmd = [
+                sys.executable, str(multi_script),
+                "--nm-mri", str(NM_MRI),
+                "--qsm", str(QSM_PATH),
+                "--mni-t1", str(MNI_T1),
+                "--atlas-mni", str(ATLAS_MNI),
+                "--data-dir", str(DATA_DIR),
+                "--output", str(ATLAS_NATIVE),
+                "--meta", str(REG_META),
+                "--register-script", str(script_dir / "register.py"),
+                "--threads", str(args.threads),
+                "--timeout-per-strategy", str(args.multi_timeout),
+            ]
+            if args.multi_keep_all:
+                cmd.append("--keep-all")
+            if args.multi_strategies:
+                cmd.extend(["--strategies", args.multi_strategies])
+
+            run(cmd, description="ПРОЦЕСС 1: Мульти-T1 регистрация")
+
+        elif args.direct_nm_to_mni:
+            cmd = [
+                sys.executable, str(script_dir / "register.py"),
+                "--subject-t1", "none",
+                "--nm-mri", str(NM_MRI),
+                "--mni-t1", str(MNI_T1),
+                "--atlas-mni", str(ATLAS_MNI),
+                "--output", str(ATLAS_NATIVE),
+                "--meta", str(REG_META),
+                "--type", "SyN",
+                "--threads", str(args.threads),
+                "--direct-nm-to-mni",
+                "--direct-method", args.direct_method,
+            ]
+            run(cmd, description=(
+                f"ПРОЦЕСС 1: ANTs (ПРЯМАЯ NM→MNI, {args.direct_method})"
+            ))
+
+        elif args.t1_other:
+            cmd = [
+                sys.executable, str(script_dir / "register.py"),
+                "--subject-t1", str(T1_PATH),
+                "--t1-anchor", str(T1_PATH),
+                "--t1-other", str(args.t1_other.expanduser()),
+                "--nm-mri", str(NM_MRI),
+                "--mni-t1", str(MNI_T1),
+                "--atlas-mni", str(ATLAS_MNI),
+                "--output", str(ATLAS_NATIVE),
+                "--meta", str(REG_META),
+                "--type", "SyN",
+                "--threads", str(args.threads),
+            ]
+            run(cmd, description="ПРОЦЕСС 1: ANTs (intermediate)")
+
+        else:
+            cmd = [
+                sys.executable, str(script_dir / "register.py"),
+                "--subject-t1", str(T1_PATH),
+                "--nm-mri", str(NM_MRI),
+                "--mni-t1", str(MNI_T1),
+                "--atlas-mni", str(ATLAS_MNI),
+                "--output", str(ATLAS_NATIVE),
+                "--meta", str(REG_META),
+                "--type", "SyN" if args.syn else "Affine",
+                "--threads", str(args.threads),
+            ]
+            run(cmd, description="ПРОЦЕСС 1: ANTs (standard)")
+
     else:
         print(f"\n[orchestrator] Регистрация в кэше")
 
-    # =========================================================================
-    # ПРОЦЕСС 1.5: ИЗВЛЕЧЕНИЕ МАСОК
-    # =========================================================================
+    # =====================================================================
+    # ПРОЦЕСС 1.5: Извлечение масок
+    # =====================================================================
     masks_exist = all(p.exists() for p in MASK_FILES)
 
-    # Авто-инвалидация: если атлас новее масок — пересоздать маски
     if masks_exist and ATLAS_NATIVE.exists():
         atlas_mtime = ATLAS_NATIVE.stat().st_mtime
         oldest_mask = min(p.stat().st_mtime for p in MASK_FILES)
         if atlas_mtime > oldest_mask:
-            print(f"\n[orchestrator] Атлас новее масок — "
-                  f"пересоздаю маски")
+            print(f"\n[orchestrator] Атлас новее масок — пересоздаю маски")
             for p in MASK_FILES:
                 p.unlink(missing_ok=True)
             masks_exist = False
@@ -334,7 +374,9 @@ echo-N_part-mag/phase. Вручную переименовывать НЕ НУЖ
     else:
         print(f"\n[orchestrator] Маски в кэше")
 
-    # ПРОЦЕСС 2: анализ
+    # =====================================================================
+    # ПРОЦЕСС 2: Анализ
+    # =====================================================================
     cmd = [
         sys.executable, str(script_dir / "analyze.py"),
         "--work-dir", str(WORK_DIR),
